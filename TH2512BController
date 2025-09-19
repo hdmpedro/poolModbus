@@ -1,0 +1,240 @@
+public class TH2512BController {
+    
+    private ModbusController modbusController;
+    private ModbusConnection connection;
+    private String portName;
+    private boolean isRunning = false;
+    private Thread realtimeThread;
+    
+    public static class TH2512BRegisters {
+        public static final int RESISTANCE_VALUE = 9;
+        public static final int RANGE_LOCK = 1;
+        public static final int RANGE_SELECT = 2;
+        public static final int TEST_SPEED = 3;
+        public static final int SORTING_ENABLE = 4;
+        public static final int DISPLAY_MODE = 5;
+        public static final int TRIGGER_MODE = 6;
+        public static final int ZERO_CLEAR = 7;
+        public static final int TRIGGER = 8;
+        public static final int NOMINAL_VALUE = 10;
+        public static final int UPPER_LIMIT = 11;
+        public static final int LOWER_LIMIT = 12;
+        
+        public static final int RANGE_20M_OHM = 1;
+        public static final int RANGE_200M_OHM = 2;
+        public static final int RANGE_2_OHM = 3;
+        public static final int RANGE_20_OHM = 4;
+        public static final int RANGE_200_OHM = 5;
+        public static final int RANGE_2K_OHM = 6;
+        public static final int RANGE_20K_OHM = 7;
+    }
+    
+    public TH2512BController() {
+        this.modbusController = new ModbusController();
+    }
+   
+    public boolean conectar(String portName, int baudRate) {
+        try {
+            this.portName = portName;
+            connection = ModbusConnection.serial(portName, baudRate);
+            modbusController.startConnection(connection);
+            Thread.sleep(1000);
+            
+            boolean connected = modbusController.isConnected();
+            if (connected) {
+                System.out.println("Conectado com sucesso na porta " + portName);
+            } else {
+                System.err.println("Falha ao conectar na porta " + portName);
+            }
+            return connected;
+            
+        } catch (Exception e) {
+            System.err.println("Erro na conexão: " + e.getMessage());
+            return false;
+        }
+    }
+    
+    public Float lerResistencia() {
+        return lerResistencia(1);
+    }
+    
+    public Float lerResistencia(int unitId) {
+        try {
+            ModbusSet<Float> resistanceSet = criarResistenciaSet(unitId);
+            modbusController.addModbusSet(resistanceSet);
+            modbusController.read(resistanceSet);
+            Thread.sleep(100); 
+            
+            byte[] byteValue = resistanceSet.getByteValue();
+            if (byteValue != null && byteValue.length >= 4) {
+                return ModbusUtils.convertToFloat(byteValue);
+            }
+            return null;
+            
+        } catch (Exception e) {
+            System.err.println("Erro na leitura: " + e.getMessage());
+            return null;
+        }
+    }
+    
+    public boolean setRangeMedicao(int unitId, int range) {
+        try {
+            ModbusSet<Integer> unlockSet = new ModbusSet<>();
+            unlockSet.setFunction(ModbusFunction.WRITE_SINGLE_REGISTER);
+            unlockSet.setSlaveId(unitId);
+            unlockSet.setStartRegister(TH2512BRegisters.RANGE_LOCK);
+            unlockSet.setCount(1);
+            unlockSet.setClassType(Integer.class);
+            unlockSet.setValue(0);
+            
+            modbusController.addModbusSet(unlockSet);
+            modbusController.write(unlockSet, 3);
+            Thread.sleep(200);
+            
+            ModbusSet<Integer> rangeSet = new ModbusSet<>();
+            rangeSet.setFunction(ModbusFunction.WRITE_SINGLE_REGISTER);
+            rangeSet.setSlaveId(unitId);
+            rangeSet.setStartRegister(TH2512BRegisters.RANGE_SELECT);
+            rangeSet.setCount(1);
+            rangeSet.setClassType(Integer.class);
+            rangeSet.setValue(range + 1);
+            
+            modbusController.addModbusSet(rangeSet);
+            modbusController.write(rangeSet, 3);
+            Thread.sleep(500);
+            
+            System.out.println("Range configurado para: " + getRangeDescricao(range));
+            return true;
+        } catch (Exception e) {
+            System.err.println("Erro ao configurar range: " + e.getMessage());
+            return false;
+        }
+    }
+    
+    public Integer lerStatusDispositivo(int unitId) {
+        try {
+            Float resistencia = lerResistencia(unitId);
+            if (resistencia != null) {
+                return 1;
+            } else {
+                return 0;
+            }
+        } catch (Exception e) {
+            System.err.println("Erro na verificação de status simulado: " + e.getMessage());
+            return null;
+        }
+    }
+    
+    public void iniciarMonitoramentoTempoReal(int unitId, long intervalMs) {
+        if (isRunning) {
+            System.out.println("Leitura em tempo real já está ativa");
+            return;
+        }
+        isRunning = true;
+        realtimeThread = new Thread(() -> {
+            
+            System.out.println("=== INICIANDO LEITURA EM TEMPO REAL ===");
+            long readCount = 0;
+            long errorCount = 0;
+            
+            while (isRunning && !Thread.currentThread().isInterrupted()) {
+                try {
+                    long startTime = System.currentTimeMillis();
+                    
+                    Float resistance = lerResistencia(unitId);
+                    readCount++;
+                    
+                    long readTime = System.currentTimeMillis() - startTime;
+                    
+                    if (resistance != null) {
+                        System.out.printf("RESISTÊNCIA -> %s (%dms)\n", formatarResistencia(resistance), readTime);
+                    } else {
+                        errorCount++;
+                        System.err.printf("Erro na leitura #%d (total erros: %d)\n", readCount, errorCount);
+                    }
+                    if(resistance != null && resistance > 3.6){
+                        System.err.println("3.6");
+                    } 
+                    
+                    long sleepTime = Math.max(0, intervalMs - readTime);
+                    if (sleepTime > 0) {
+                        Thread.sleep(sleepTime);
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Exception e) {
+                    errorCount++;
+                    System.err.println("Erro durante leitura contínua: " + e.getMessage());
+                    try {
+                        Thread.sleep(intervalMs);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+        });
+        
+        realtimeThread.setDaemon(false);
+        realtimeThread.start();
+    }
+    
+    public void pararLeituraTempoReal() {
+        isRunning = false;
+        if (realtimeThread != null && realtimeThread.isAlive()) {
+            realtimeThread.interrupt();
+            try {
+                realtimeThread.join(2000); 
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+    
+    public void desconectar() {
+        pararLeituraTempoReal();
+        try {
+            if (modbusController != null) {
+                modbusController.closeConnection();
+                System.out.println("Conexão fechada com sucesso");
+            }
+        } catch (Exception e) {
+            System.err.println("Erro ao fechar conexão: " + e.getMessage());
+        }
+    }
+    
+    private ModbusSet<Float> criarResistenciaSet(int unitId) {
+        ModbusSet<Float> resistanceSet = new ModbusSet<>();
+        resistanceSet.setFunction(ModbusFunction.HOLDING_REGISTER);
+        resistanceSet.setSlaveId(unitId);
+        resistanceSet.setStartRegister(TH2512BRegisters.RESISTANCE_VALUE);
+        resistanceSet.setCount(2);
+        resistanceSet.setClassType(Float.class);
+        return resistanceSet;
+    }
+    
+    private String formatarResistencia(Float resistance) {
+        if (resistance >= 1000000) {
+            return String.format("%.3f MΩ", resistance / 1000000);
+        } else if (resistance >= 1000) {
+            return String.format("%.3f kΩ", resistance / 1000);
+        } else {
+            return String.format("%.3f Ω", resistance);
+        }
+    }
+    
+    private String getRangeDescricao(int range) {
+        switch (range) {
+            case 0: return "Auto";
+            case TH2512BRegisters.RANGE_20M_OHM: return "20 mΩ";
+            case TH2512BRegisters.RANGE_200M_OHM: return "200 mΩ";
+            case TH2512BRegisters.RANGE_2_OHM: return "2 Ω";
+            case TH2512BRegisters.RANGE_20_OHM: return "20 Ω";
+            case TH2512BRegisters.RANGE_200_OHM: return "200 Ω";
+            case TH2512BRegisters.RANGE_2K_OHM: return "2 kΩ";
+            case TH2512BRegisters.RANGE_20K_OHM: return "20 kΩ";
+            default: return "Desconhecido (" + range + ")";
+        }
+    }
+}
