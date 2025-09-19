@@ -1,0 +1,111 @@
+public class ModbusController {
+    
+    private ModbusSerialConnector connector;
+    private String currentPortName;
+    private boolean connected = false;
+    private final Map<String, ModbusSet<?>> modbusSetMap = new ConcurrentHashMap<>();
+
+    public void startConnection(ModbusConnection connection) throws Exception {
+        if (connection.isSerial()) {
+            this.currentPortName = connection.getSerialPort();
+            this.connector = SerialConnectionPool.getConnection(
+                connection.getSerialPort(), 
+                connection.getBaudRate()
+            );
+            this.connected = true;
+        } else {
+            throw new UnsupportedOperationException("TCP não implementado nesta versão");
+        }
+    }
+
+    public void closeConnection() throws Exception {
+        if (connected && currentPortName != null) {
+            SerialConnectionPool.releaseConnection(currentPortName);
+            this.connected = false;
+            this.connector = null;
+            this.currentPortName = null;
+        }
+    }
+
+    public boolean isConnected() {
+        return connected && connector != null && connector.isConnected();
+    }
+
+    public void addModbusSet(ModbusSet<?> modbusSet) {
+        String key = generateKey(modbusSet);
+        modbusSetMap.put(key, modbusSet);
+    }
+
+    public void read(ModbusSet<?> modbusSet) throws Exception {
+        validateConnection();
+        
+        int function = getFunctionCode(modbusSet.getFunction());
+        
+        byte[] response = ModbusSerialMessage.ler(
+            connector,
+            function,
+            modbusSet.getSlaveId(),
+            modbusSet.getStartRegister(),
+            modbusSet.getCount()
+        );
+        
+        modbusSet.setByteValue(response);
+    }
+
+    public void write(ModbusSet<?> modbusSet, int retries) throws Exception {
+        validateConnection();
+        
+        int function = getFunctionCode(modbusSet.getFunction());
+        
+        ModbusSerialMessage.write(
+            connector,
+            function,
+            modbusSet.getSlaveId(),
+            modbusSet.getStartRegister(),
+            modbusSet.getCount(),
+            convertValueToBytes(modbusSet.getValue())
+        );
+    }
+
+    private void validateConnection() throws Exception {
+        if (!isConnected()) {
+            throw new Exception("Não conectado ao dispositivo Modbus");
+        }
+    }
+
+    private int getFunctionCode(ModbusFunction function) {
+        switch (function) {
+            case HOLDING_REGISTER:
+                return 3;
+            case INPUT_REGISTER:
+                return 4;
+            case WRITE_SINGLE_REGISTER:
+                return 6;
+            case WRITE_MULTIPLE_REGISTERS:
+                return 16;
+            default:
+                throw new IllegalArgumentException("Função não suportada: " + function);
+        }
+    }
+
+    private String generateKey(ModbusSet<?> modbusSet) {
+        return String.format("%d_%d_%d_%d", 
+            modbusSet.getSlaveId(),
+            getFunctionCode(modbusSet.getFunction()),
+            modbusSet.getStartRegister(),
+            modbusSet.getCount()
+        );
+    }
+
+    private byte[] convertValueToBytes(Object value) {
+        if (value instanceof Integer) {
+            int intValue = (Integer) value;
+            return new byte[]{
+                (byte) ((intValue >> 8) & 0xFF),
+                (byte) (intValue & 0xFF)
+            };
+        }
+        throw new UnsupportedOperationException("Tipo de valor não suportado: " + 
+            (value != null ? value.getClass().getSimpleName() : "null"));
+    }
+}
