@@ -1,0 +1,55 @@
+public class SerialConnectionPool {
+    private static final Map<String, ModbusSerialConnector> connectionPool = new ConcurrentHashMap<>();
+    private static final Map<String, AtomicInteger> referenceCount = new ConcurrentHashMap<>();
+    private static final Object poolLock = new Object();
+
+    public static ModbusSerialConnector getConnection(String portName, int baudRate) throws Exception {
+        synchronized (poolLock) {
+            ModbusSerialConnector connector = connectionPool.get(portName);
+            
+            if (connector == null || !connector.isConnected()) {
+                connector = new ModbusSerialConnector(portName, baudRate);
+                connector.connect();
+                connectionPool.put(portName, connector);
+                referenceCount.put(portName, new AtomicInteger(0));
+            }
+            
+            referenceCount.get(portName).incrementAndGet();
+            return connector;
+        }
+    }
+
+    public static void releaseConnection(String portName) {
+        synchronized (poolLock) {
+            AtomicInteger refCount = referenceCount.get(portName);
+            if (refCount != null && refCount.decrementAndGet() <= 0) {
+                ModbusSerialConnector connector = connectionPool.remove(portName);
+                referenceCount.remove(portName);
+                
+                if (connector != null && connector.isConnected()) {
+                    try {
+                        connector.close();
+                    } catch (Exception e) {
+                        System.err.println("Erro ao fechar conexão pooled: " + e.getMessage());
+                    }
+                }
+            }
+        }
+    }
+
+    public static void closeAllConnections() {
+        synchronized (poolLock) {
+            for (ModbusSerialConnector connector : connectionPool.values()) {
+                try {
+                    if (connector.isConnected()) {
+                        connector.close();
+                    }
+                } catch (Exception e) {
+                    System.err.println("Erro ao fechar conexão: " + e.getMessage());
+                }
+            }
+            connectionPool.clear();
+            referenceCount.clear();
+        }
+    }
+}
