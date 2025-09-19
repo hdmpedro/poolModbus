@@ -1,0 +1,36 @@
+//PA TESTA SABOST A
+public class Teste{
+public static void main(String[] args) {
+        TH2512BController dispositivo1 = new TH2512BController();
+        TH2512BController dispositivo2 = new TH2512BController();
+        TH2512BController dispositivo3 = new TH2512BController();
+        
+        try {
+            dispositivo1.conectar("COM3", 9600);
+            dispositivo2.conectar("COM3", 9600); 
+            dispositivo3.conectar("COM3", 9600);
+            
+            Float resistencia1 = dispositivo1.lerResistencia(1);
+            Float resistencia2 = dispositivo2.lerResistencia(2);
+            Float resistencia3 = dispositivo3.lerResistencia(3);
+            
+            System.out.println("Dispositivo 1 (Unit ID 1): " + resistencia1);
+            System.out.println("Dispositivo 2 (Unit ID 2): " + resistencia2);
+            System.out.println("Dispositivo 3 (Unit ID 3): " + resistencia3);
+            
+            dispositivo1.setRangeMedicao(1, TH2512BController.TH2512BRegisters.RANGE_2K_OHM);
+            dispositivo2.setRangeMedicao(2, TH2512BController.TH2512BRegisters.RANGE_20K_OHM);
+            
+            Thread.sleep(2000);
+            
+        } catch (Exception e) {
+            System.err.println("Erro: " + e.getMessage());
+        } finally {
+            dispositivo1.desconectar();
+            dispositivo2.desconectar();
+            dispositivo3.desconectar();
+            
+            SerialConnectionPool.closeAllConnections();
+        }
+    }
+}
